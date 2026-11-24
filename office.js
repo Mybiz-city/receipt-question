@@ -13,7 +13,14 @@
     return e;
   }
   function show(kids) { main.textContent = ''; kids.forEach(function (c) { if (c) main.appendChild(c); }); }
-  function busy(on) { document.getElementById('busy').hidden = !on; document.getElementById('busytext').textContent = on ? '処理しています' : ''; }
+  var tick = null, lastList = null;   // lastList：顧問先の一覧の控え（「一覧へ戻る」をすぐ出すため）
+  function busy(on) {   // 待つあいだ、経過の秒を出す（止まっているのか、動いているのかが分かるように）
+    var t = document.getElementById('busytext'), t0 = Date.now();
+    document.getElementById('busy').hidden = !on;
+    if (tick) { clearInterval(tick); tick = null; }
+    t.textContent = on ? '処理しています' : '';
+    if (on) tick = setInterval(function () { t.textContent = '処理しています（' + Math.round((Date.now() - t0) / 1000) + '秒）'; }, 1000);
+  }
   function api(fn, args) {
     busy(true);
     return fetch(API, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain' },
@@ -40,8 +47,8 @@
       } } })])]);
   }
 
-  function list(note, url) {
-    api('oClients').then(function (r) {
+  function list(note, url, quick) {   // quick：控えからすぐ出す（押したあとの動きは、いつも読み直す）
+    ((quick && lastList) ? Promise.resolve(lastList) : api('oClients').then(function (r) { lastList = r; return r; })).then(function (r) {
       var code6 = el('input', { type: 'text', inputmode: 'numeric', maxlength: '10', autocomplete: 'off', placeholder: 'いまの6桁' });
       var m = el('p', { class: note && note.bad ? 'warn' : 'done', text: note ? note.text : '', hidden: note ? null : '' });
       function act(fn, args, done) {
@@ -86,7 +93,7 @@
             .catch(function (e) { if (e.message !== 'sess') { m.textContent = e.message; m.hidden = false; } });
         } } });
       }
-      var kids = [el('button', { class: 'small soft', text: '一覧へ戻る', on: { click: function () { list(); } } }), el('h1', { text: r.name }), m, code6];
+      var kids = [el('button', { class: 'small soft', text: '一覧へ戻る', on: { click: function () { list(null, null, true); } } }), el('h1', { text: r.name }), m, code6];
       if (!r.works.length) kids.push(el('p', { class: 'sub', text: '領収書の質問は、まだありません（ReceiptScan で保留にして出力すると出ます）。' }));
       r.works.forEach(function (w) {
         kids.push(el('div', { class: 'card' }, [
