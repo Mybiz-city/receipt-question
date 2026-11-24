@@ -37,19 +37,33 @@
     b.hidden = false; t.textContent = text;
     busyTimer = setInterval(function () { t.textContent = text + '（' + Math.round((Date.now() - t0) / 1000) + '秒）'; }, 1000);
   }
-  function api(fn, args, text) {
-    busy(text || '読み込んでいます');
+  function api(fn, args, text, quiet) {   // quiet：画面を止めずに、裏で送る
+    if (!quiet) busy(text || '読み込んでいます');
     return fetch(API, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain' },
                         body: JSON.stringify({ fn: fn, args: args || {}, sess: sess }) })
       .then(function (r) { return r.json(); })
       .catch(function () { return { ok: false, err: '通信できませんでした。電波のよい所で、もう一度お試しください。' }; })
       .then(function (r) {
-        busy('');
+        if (!quiet) busy('');
         if (!r.ok && r.code === 'sess') { sess = ''; pinScreen('pin', r.err); throw new Error('sess'); }
         if (!r.ok) { var e = new Error(r.err); e.shown = r.err; e.code = r.code; throw e; }
         return r.r;
       });
   }
+  // 第18版：保存は裏で順番に送り、画面は先に進める（1回の保存に2〜3秒かかるため）。送信は、保存が全部終わってから行う
+  var pending = Promise.resolve(), waiting = 0;
+  function chip() { var c = document.getElementById('saving'); if (c) c.hidden = waiting === 0; }
+  function later(fn, args, done) {
+    waiting++; chip();
+    pending = pending.then(function () { return api(fn, args, '', true); }).then(function (r) {
+      waiting--; chip(); if (done) done(r);
+    }, function (e) {
+      waiting--; chip();
+      if (e.message !== 'sess') home((e.shown || '保存できませんでした。') + '　画面を読み直しました。お手数ですが、もう一度お願いします。', true);
+    });
+  }
+  function settled(text) { busy(text); return pending.then(function () { busy(''); }); }   // 裏の保存が終わるのを待つ
+  window.addEventListener('beforeunload', function (e) { if (waiting) { e.preventDefault(); e.returnValue = ''; } });
   function fail(box) { return function (e) { if (e.message !== 'sess') box.textContent = e.shown || 'うまくいきませんでした。もう一度お試しください。'; box.hidden = false; }; }
   function msgBox() { return el('p', { class: 'warn', hidden: '' }); }
 
@@ -75,7 +89,7 @@
       if (!/^\d{6}$/.test(p1.value)) { m.textContent = '数字6つを入れてください。'; m.hidden = false; return; }
       if (set && p1.value !== p2.value) { m.textContent = '2回の番号がちがいます。もう一度入れてください。'; m.hidden = false; return; }
       api(set ? 'setPin' : 'login', { code: CODE, key: KEY, pin: p1.value }, '確かめています')
-        .then(function (r) { sess = r.sess; home(); }).catch(function (e) { p1.value = ''; p2.value = ''; fail(m)(e); });
+        .then(function (r) { sess = r.sess; home(null, false, r.first); }).catch(function (e) { p1.value = ''; p2.value = ''; fail(m)(e); });
     }
     show([card([
       el('h1', { text: set ? 'はじめに、番号を決めてください' : '番号を入れてください' }),
@@ -88,13 +102,13 @@
   }
 
   // ───── はじめの画面 ─────
-  function home(note) {
-    api('list').then(function (r) {
+  function home(note, bad, first) {   // first：ログインの返事に入っていた一覧（あれば、取りに行かない）
+    (first ? Promise.resolve(first) : api('list')).then(function (r) {
       data = r;
       texts = r.texts || {};
       var gb = document.getElementById('guidebtn'); if (gb) gb.hidden = !texts.guide;   // 図解は、ログインのあとにだけ出す
       document.getElementById('who').textContent = r.name + ' 様';
-      var kids = [note ? el('p', { class: 'done', text: note }) : null];
+      var kids = [note ? el('p', { class: bad ? 'warn' : 'done', text: note }) : null];
       var open = r.works.filter(function (w) { return !w.submitted; });
       if (!open.length && r.ratio.submitted) kids.push(card([el('p', { text: 'いま、お答えいただくものはありません。ありがとうございました。' })]));
       r.works.forEach(function (w) {
@@ -184,12 +198,11 @@
       if (kind && !kind.value) { m.textContent = 'お答えをえらんでください。'; m.hidden = false; return; }
       if (kind && kind.value === 'その他' && !memo.value.trim()) { m.textContent = '「その他」のときは、メモに内容を書いてください。'; m.hidden = false; return; }
       if (!kind && !memo.value.trim()) { m.textContent = 'お答えを書いてください。'; m.hidden = false; return; }
-      api('answer', { wd: w.workdate, seq: it.seq, what: kind ? kind.value : '', percent: Number(pct.value), memo: memo.value }, '保存しています')
-        .then(function (r) {
-          it.answer = r.answer;
-          var next = w.items.findIndex(function (x, j) { return j > i && !x.answer; });
-          editing || next < 0 ? list(w) : receipt(w, next);   // 直したときは一覧へ戻る。はじめてのときは、次のまだのものへ
-        }).catch(fail(m));
+      var mine = { what: kind ? kind.value : '', percent: Number(pct.value), memo: memo.value };
+      it.answer = mine;                                         // 画面は先に進める。保存は裏で
+      later('answer', { wd: w.workdate, seq: it.seq, what: mine.what, percent: mine.percent, memo: mine.memo }, function (r) { if (it.answer === mine) it.answer = r.answer; });
+      var next = w.items.findIndex(function (x, j) { return j > i && !x.answer; });
+      editing || next < 0 ? list(w) : receipt(w, next);   // 直したときは一覧へ戻る。はじめてのときは、次のまだのものへ
     }
     show([card([
       el('p', { class: 'step', text: (i + 1) + ' / ' + w.items.length + ' 件目　お答えの期限 ' + day(w.limit) }),
@@ -236,15 +249,22 @@
     w.open = w.open || {};
     function quick(it, percent) {
       return function () {
-        api('answer', { wd: w.workdate, seq: it.seq, quick: true, percent: percent }, '保存しています')
-          .then(function (r) { it.answer = r.answer; list(w); }).catch(fail(m));
+        var old = it.answer, mine = old ? Object.assign({}, old, { percent: percent, bulk: false }) : { what: '', memo: '', percent: percent, skipped: true };
+        it.answer = mine;
+        later('answer', { wd: w.workdate, seq: it.seq, quick: true, percent: percent }, function (r) { if (it.answer === mine) it.answer = r.answer; });
+        list(w);
       };
     }
     function bulk(kind, percent) {
-      api('bulk', { wd: w.workdate, kind: kind, percent: percent }, '保存しています').then(function (r) {
-        w.items.forEach(function (it) { if (r.answers[String(it.seq)]) it.answer = r.answers[String(it.seq)]; });
-        list(w);
-      }).catch(fail(m));
+      var mine = {};
+      w.items.forEach(function (it) {   // 1枚ずつ決めたものは変えない（サーバーと同じ決まり）
+        if (it.kind === kind && (!it.answer || it.answer.bulk)) { it.answer = mine[it.seq] = { what: '', memo: '', percent: percent, skipped: true, bulk: true }; }
+      });
+      if (!Object.keys(mine).length) { m.textContent = 'まとめて決められるレシートがありません（1枚ずつ決めてあります）。'; m.hidden = false; return; }
+      later('bulk', { wd: w.workdate, kind: kind, percent: percent }, function (r) {
+        w.items.forEach(function (it) { if (r.answers[String(it.seq)] && it.answer === mine[it.seq]) it.answer = r.answers[String(it.seq)]; });
+      });
+      list(w);
     }
     function row(it) {
       var a = it.answer, i = w.items.indexOf(it);
@@ -273,7 +293,7 @@
     });
     var skippedN = w.items.filter(function (x) { return x.answer && x.answer.skipped && x.answer.percent > 0; }).length;
     function doSend(confirmed) {
-      api('submit', { wd: w.workdate, confirmSkipped: confirmed }, '送信しています').then(function () { home('送信しました。ありがとうございました。'); }).catch(fail(m));
+      settled('保存しています').then(function () { return api('submit', { wd: w.workdate, confirmSkipped: confirmed }, '送信しています'); }).then(function () { home('送信しました。ありがとうございました。'); }).catch(fail(m));
     }
     var send = el('button', { text: 'この内容で送信する', on: { click: function () { skippedN ? confirmSkipped(w, skippedN, doSend) : doSend(false); } } });
     send.disabled = left > 0;
@@ -349,8 +369,9 @@
     function toList() { return el('button', { class: 'link', text: '一覧へ', on: { click: function () { ratioReview(); } } }); }
     function send(g, m) {
       var groups = {}; groups[def.name] = g;
-      api('ratioSave', { groups: groups }, '保存しています')
-        .then(function (r) { ratio.saved = r.saved; i + 1 < ratio.groups.length && !ratio.saved[ratio.groups[i + 1].name] ? ratioGroup(i + 1) : ratioReview(); }).catch(fail(m));
+      ratio.saved[def.name] = g;                                // 画面は先に進める。保存は裏で
+      later('ratioSave', { groups: groups }, function (r) { if (ratio.saved[def.name] === g) ratio.saved[def.name] = r.saved[def.name]; });
+      i + 1 < ratio.groups.length && !ratio.saved[ratio.groups[i + 1].name] ? ratioGroup(i + 1) : ratioReview();
     }
     function stepKind() {
       var m = msgBox();
@@ -435,7 +456,7 @@
   function ratioReview() {
     var m = msgBox(), left = ratio.groups.filter(function (g) { return !ratio.saved[g.name]; }).length;
     function doSend(from) {
-      api('ratioSave', { groups: {}, submit: true, from: from }, '送信しています').then(function () { home('送信しました。ありがとうございました。'); }).catch(fail(m));
+      settled('保存しています').then(function () { return api('ratioSave', { groups: {}, submit: true, from: from }, '送信しています'); }).then(function () { home('送信しました。ありがとうございました。'); }).catch(fail(m));
     }
     var send = el('button', { text: 'この内容で送信する', on: { click: function () { ratio.resend ? askFrom(doSend) : doSend(''); } } });
     var rows = ratio.groups.map(function (def, i) {
@@ -444,7 +465,9 @@
         + Object.keys(a.overrides || {}).map(function (k) { return '　' + k + 'だけ ' + a.overrides[k].percent + '％'; }).join('') });
       function put(g) {
         var groups = {}; groups[def.name] = g;
-        api('ratioSave', { groups: groups }, '保存しています').then(function (r) { ratio.saved = r.saved; ratioReview(); }).catch(fail(m));
+        ratio.saved[def.name] = g;
+        later('ratioSave', { groups: groups }, function (r) { if (ratio.saved[def.name] === g) ratio.saved[def.name] = r.saved[def.name]; });
+        ratioReview();
       }
       return entry('rg' + (a ? '' : ' todo'), def.short || def.name, !a ? 'まだ' : none ? '0％' : a.percent + '％', [
         { text: '0％', on: none, click: function () { put({ kind: ratio.none }); } },

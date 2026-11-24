@@ -133,3 +133,7 @@ ul.s-ng{background:#FBEDE8}ul.s-ng li::marker{color:#B5482F}
 /* ちえに聞く（第15版） */
 a.chie{display:block;margin:10px 0 2px;padding:10px 12px;border:1px solid #00A88E;border-radius:10px;color:#00806C;text-align:center;text-decoration:none;font-size:15px;background:#fff}
 #guidebtn[hidden]{display:none}
+
+/* 第18版：裏で保存している印 */
+#saving{font-size:12px;color:#00806C;margin-left:auto;margin-right:8px;white-space:nowrap}
+#saving[hidden]{display:none}
