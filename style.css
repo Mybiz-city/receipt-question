@@ -137,3 +137,7 @@ a.chie{display:block;margin:10px 0 2px;padding:10px 12px;border:1px solid #00A88
 /* 第18版：裏で保存している印 */
 #saving{font-size:12px;color:#00806C;margin-left:auto;margin-right:8px;white-space:nowrap}
 #saving[hidden]{display:none}
+
+/* 第20版 */
+label.check{display:flex;align-items:flex-start;gap:8px;font-size:14px;margin:12px 0}
+label.check input{width:22px;height:22px;flex:none;margin:0}

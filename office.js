@@ -54,19 +54,19 @@
       var m = el('p', { class: note && note.bad ? 'warn' : 'done', text: note ? note.text : '', hidden: note ? null : '' });
       function act(fn, args, done) {
         return function () {
-          if (!code6.value) { m.className = 'warn'; m.textContent = '上の欄に、認証アプリのいまの6桁を入れてから押してください。'; m.hidden = false; return; }
+          if (r.needTotp && !code6.value) { m.className = 'warn'; m.textContent = '上の欄に、認証アプリのいまの6桁を入れてから押してください。'; m.hidden = false; return; }
           args.totp = code6.value;
-          api(fn, args).then(done).catch(function (e) { if (e.message !== 'sess') list({ text: e.message, bad: true }); });
+          api(fn, args).then(done).catch(function (e) { if (e.message !== 'sess') { lastList = null; list({ text: e.message, bad: true }); } });
         };
       }
       var rows = r.clients.map(function (c) {
-        var state = !c.issued ? 'URLなし' : c.stopped ? '停止中（番号ちがい10回）' : c.expires < r.today ? 'URLの期限切れ' : !c.hasPin ? '番号を決める前' : '利用中';
+        var state = !c.issued ? 'URLなし' : c.forgot ? '番号の決め直しの依頼あり（' + c.forgot.slice(5, 16).replace('T', ' ') + '）' : c.stopped ? '停止中（番号ちがい10回）' : c.expires < r.today ? 'URLの期限切れ' : !c.hasPin ? '番号を決める前' : '利用中';
         return el('tr', {}, [
           el('td', { text: c.name }), el('td', { text: state }), el('td', { text: c.expires }),
           el('td', {}, [
             el('button', { class: 'small', text: c.issued ? 'URLを作り直す' : 'URLを作る', on: { click: act('oIssue', { code: c.code }, function (x) {
               list({ text: c.name + ' のURLを作りました（期限 ' + x.expires + '）。古いURLは使えなくなりました。' }, x.url); }) } }),
-            c.issued ? el('button', { class: 'small soft', text: '番号を消す', on: { click: act('oReset', { code: c.code }, function () {
+            c.issued ? el('button', { class: 'small soft', text: c.forgot ? '番号を消す（依頼に応える）' : '番号を消す', on: { click: act('oReset', { code: c.code }, function () {
               list({ text: c.name + ' の番号を消しました。次に開いたとき、ご本人が決め直します。' }); }) } }) : null,
             el('button', { class: 'small soft', text: '回答を見る', on: { click: function () { status(c.code); } } })])]);
       });
@@ -78,7 +78,8 @@
           el('button', { class: 'small', text: 'コピー', on: { click: function () { u.select(); navigator.clipboard && navigator.clipboard.writeText(url); } } })]);
       }
       show([m, urlBox, el('div', { class: 'card' }, [el('h1', { text: '顧問先の一覧' }),
-        el('label', { text: 'URLを作る・番号を消す・送信済みを戻すときは、認証アプリのいまの6桁を入れてから押します（1回ごとに新しい6桁）' }), code6,
+        r.needTotp ? el('label', { text: '前に6桁を入れてから60分たちました。URLを作る・番号を消すときは、認証アプリのいまの6桁を入れてから押します' }) : el('p', { class: 'sub', text: '6桁は、ログインから60分は入れなくて大丈夫です。' }),
+        r.needTotp ? code6 : null,
         el('table', {}, [el('tr', {}, ['顧問先', '状態', 'URLの期限', '操作'].map(function (h) { return el('th', { text: h }); }))].concat(rows))])]);
     }).catch(function () {});
   }
@@ -86,10 +87,10 @@
   function status(code) {
     api('oStatus', { code: code }).then(function (r) {
       var code6 = el('input', { type: 'text', inputmode: 'numeric', maxlength: '10', autocomplete: 'off', placeholder: 'いまの6桁（送信済みを戻すとき）' });
-      var m = el('p', { class: 'warn', hidden: '' });
+      var m = el('p', { class: 'warn', hidden: '' }), need = !lastList || lastList.needTotp;
       function reopen(wd) {
         return el('button', { class: 'small soft', text: '直せる状態に戻す', on: { click: function () {
-          if (!code6.value) { m.textContent = '認証アプリのいまの6桁を入れてから押してください。'; m.hidden = false; return; }
+          if (need && !code6.value) { m.textContent = '認証アプリのいまの6桁を入れてから押してください。'; m.hidden = false; return; }
           api('oReopen', { code: code, wd: wd, totp: code6.value }).then(function () { status(code); })
             .catch(function (e) { if (e.message !== 'sess') { m.textContent = e.message; m.hidden = false; } });
         } } });

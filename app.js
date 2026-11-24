@@ -45,7 +45,7 @@
       .catch(function () { return { ok: false, err: '通信できませんでした。電波のよい所で、もう一度お試しください。' }; })
       .then(function (r) {
         if (!quiet) busy('');
-        if (!r.ok && r.code === 'sess') { sess = ''; pinScreen('pin', r.err); throw new Error('sess'); }
+        if (!r.ok && r.code === 'sess') { sess = ''; boot(r.err); throw new Error('sess'); }
         if (!r.ok) { var e = new Error(r.err); e.shown = r.err; e.code = r.code; throw e; }
         return r.r;
       });
@@ -98,8 +98,18 @@
   function start() {
     if (!API) return show([card([el('p', { text: '準備中です。' })])]);
     if (!CODE || !KEY) return show([card([el('p', { text: 'このURLは使えません。事務所から届いたURLを、そのまま開いてください。' })])]);
-    api('hello', { code: CODE, key: KEY }).then(function (r) { pinScreen(r.state); })
-      .catch(function (e) { show([card([el('p', { class: 'warn', text: e.shown || '開けませんでした。' })])]); });
+    boot();
+  }
+  // 第20版：番号を入れた端末は、30日間おぼえる（端末の中に合言葉を置く。URLの合言葉と両方そろって、はじめて入れる）
+  var DEVKEY = 'q_dev_' + CODE;
+  function devGet() { try { return window.localStorage.getItem(DEVKEY) || ''; } catch (e) { return ''; } }
+  function devSet(v) { try { v ? window.localStorage.setItem(DEVKEY, v) : window.localStorage.removeItem(DEVKEY); } catch (e) { /* 置けない端末では、毎回番号を入れる */ } }
+  function boot(note) {
+    api('hello', { code: CODE, key: KEY, dev: devGet() }).then(function (r) {
+      if (r.state === 'in') { sess = r.sess; home(null, false, r.first); return; }
+      if (devGet()) devSet('');                                 // 期限が切れた・外された
+      pinScreen(r.state, note || (r.forgot ? '番号の決め直しを、事務所に依頼しています。事務所から連絡があるまで、お待ちください。' : ''));
+    }).catch(function (e) { if (e.message !== 'sess') show([card([el('p', { class: 'warn', text: e.shown || '開けませんでした。' })])]); });
   }
   function pinInput() { return el('input', { class: 'pin', type: 'password', inputmode: 'numeric', maxlength: '6', autocomplete: 'off', pattern: '\\d{6}' }); }
   function pinScreen(state, note) {
@@ -109,16 +119,32 @@
       m.hidden = true;
       if (!/^\d{6}$/.test(p1.value)) { m.textContent = '数字6つを入れてください。'; m.hidden = false; return; }
       if (set && p1.value !== p2.value) { m.textContent = '2回の番号がちがいます。もう一度入れてください。'; m.hidden = false; return; }
-      api(set ? 'setPin' : 'login', { code: CODE, key: KEY, pin: p1.value }, '確かめています')
-        .then(function (r) { sess = r.sess; home(null, false, r.first); }).catch(function (e) { p1.value = ''; p2.value = ''; fail(m)(e); });
+      api(set ? 'setPin' : 'login', { code: CODE, key: KEY, pin: p1.value, remember: keep.checked }, '確かめています')
+        .then(function (r) { sess = r.sess; devSet(r.dev || ''); home(null, false, r.first); }).catch(function (e) { p1.value = ''; p2.value = ''; fail(m)(e); });
+    }
+    var keep = el('input', { type: 'checkbox' }); keep.checked = true;
+    function forgot() {
+      var fm = msgBox();
+      show([card([
+        el('h1', { text: '番号を忘れたとき' }),
+        el('p', { class: 'sub', text: '事務所に、番号の決め直しを依頼します。事務所が受け付けたあと、もう一度このページを開くと、新しい番号を決められます。' }),
+        fm,
+        el('button', { text: '事務所に依頼する', on: { click: function () {
+          api('forgot', { code: CODE, key: KEY }, '依頼しています').then(function () {
+            show([card([el('h1', { text: '依頼しました' }), el('p', { text: '事務所が受け付けるまで、お待ちください。受け付けたあと、もう一度このページを開いてください。' })])]);
+          }).catch(fail(fm));
+        } } }),
+        el('button', { class: 'soft', text: '戻る', on: { click: function () { pinScreen(state); } } })])]);
     }
     show([card([
       el('h1', { text: set ? 'はじめに、番号を決めてください' : '番号を入れてください' }),
       el('p', { class: 'sub', text: set ? 'ご自分で決める数字6つです。次からは、開くたびにこの番号を入れます。誕生日や電話番号は避けてください。'
-                                        : 'はじめに決めた数字6つです。忘れたときは、事務所へご連絡ください。' }),
+                                        : 'はじめに決めた数字6つです。' }),
       m, el('label', { text: '番号（数字6つ）' }), p1,
       set ? el('label', { text: 'もう一度' }) : null, set ? p2 : null,
-      el('button', { text: set ? 'この番号に決める' : '開く', on: { click: go } })
+      el('label', { class: 'check' }, [keep, document.createTextNode(' この端末では、30日間、番号を省く（ご自分のスマホ・パソコンのときだけ）')]),
+      el('button', { text: set ? 'この番号に決める' : '開く', on: { click: go } }),
+      set ? null : el('button', { class: 'link', text: '番号を忘れたとき', on: { click: forgot } })
     ])]);
   }
 
