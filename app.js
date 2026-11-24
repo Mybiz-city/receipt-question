@@ -50,19 +50,40 @@
         return r.r;
       });
   }
-  // 第18版：保存は裏で順番に送り、画面は先に進める（1回の保存に2〜3秒かかるため）。送信は、保存が全部終わってから行う
-  var pending = Promise.resolve(), waiting = 0;
+  // 第19版：保存は裏でためて、まとめて1回で送る（1回の通信に数秒かかるため）。画面は先に進める。
+  // 送信も同じ1回に入れる。保存に失敗したら、そこで止めて、画面を読み直して知らせる
+  var queue = [], sending = null, waiting = 0;
   function chip() { var c = document.getElementById('saving'); if (c) c.hidden = waiting === 0; }
-  function later(fn, args, done) {
-    waiting++; chip();
-    pending = pending.then(function () { return api(fn, args, '', true); }).then(function (r) {
-      waiting--; chip(); if (done) done(r);
-    }, function (e) {
-      waiting--; chip();
-      if (e.message !== 'sess') home((e.shown || '保存できませんでした。') + '　画面を読み直しました。お手数ですが、もう一度お願いします。', true);
-    });
+  function pump() {   // ためた分を、まとめて送る。送っている間にたまった分は、次の1回で送る
+    if (sending || !queue.length) return sending || Promise.resolve();
+    var batch = queue; queue = [];
+    sending = api('batch', { calls: batch.map(function (q) { return { fn: q.fn, args: q.args }; }) }, '', true).then(function (r) {
+      var bad = null;
+      batch.forEach(function (q, i) {
+        var x = r.results[i] || { ok: false, skipped: true };
+        waiting--;
+        if (x.ok) { if (q.done) q.done(x.r); } else { if (!bad && !x.skipped) bad = x; if (q.fail) q.fail(x); }
+      });
+      if (bad) { var e = new Error(bad.err); e.shown = bad.err; e.code = bad.code; throw e; }
+    }, function (e) { waiting -= batch.length; batch.forEach(function (q) { if (q.fail) q.fail({ ok: false, err: e.shown }); }); throw e; });
+    sending = sending.then(function () { sending = null; chip(); return pump(); },
+                           function (e) { sending = null; queue = []; waiting = 0; chip(); throw e; });
+    return sending;
   }
-  function settled(text) { busy(text); return pending.then(function () { busy(''); }); }   // 裏の保存が終わるのを待つ
+  function lost(e) { if (e.message !== 'sess') home((e.shown || '保存できませんでした。') + '　画面を読み直しました。お手数ですが、もう一度お願いします。', true); }
+  function later(fn, args, done) {
+    queue.push({ fn: fn, args: args, done: done }); waiting++; chip();
+    setTimeout(function () { pump().catch(lost); }, window.Q_DELAY == null ? 600 : window.Q_DELAY);   // 続けて押した分を、1回にまとめる
+  }
+  // 送信：たまっている保存と一緒に、1回で送る。結果を待つ
+  function sendWith(fn, args, text) {
+    busy(text);
+    return new Promise(function (resolve, reject) {
+      queue.push({ fn: fn, args: args, done: resolve, fail: function (x) { var e = new Error(x.err || ''); e.shown = x.err || '保存できなかったものがあるため、送信していません。もう一度お試しください。'; reject(e); } });
+      waiting++; chip();
+      pump().catch(function (e) { reject(e); });
+    }).then(function (r) { busy(''); return r; }, function (e) { busy(''); throw e; });
+  }
   window.addEventListener('beforeunload', function (e) { if (waiting) { e.preventDefault(); e.returnValue = ''; } });
   function fail(box) { return function (e) { if (e.message !== 'sess') box.textContent = e.shown || 'うまくいきませんでした。もう一度お試しください。'; box.hidden = false; }; }
   function msgBox() { return el('p', { class: 'warn', hidden: '' }); }
@@ -152,8 +173,10 @@
   }
 
   // ───── 領収書1枚ずつ（スマホの1画面に収める。画像は押すと大きく出る） ─────
-  function zoom(src) {
-    var box = el('div', { class: 'pop' }, [el('img', { src: src, alt: '領収書の画像' }), el('p', { text: '画面を押すと閉じます' })]);
+  function zoom(src, bigger) {   // まず手元の小さい版を出し、大きい版が届いたら差し替える
+    var img = el('img', { src: src, alt: '領収書の画像' });
+    var box = el('div', { class: 'pop' }, [img, el('p', { text: '画面を押すと閉じます' })]);
+    if (bigger) bigger.then(function (big) { img.src = big; }, function () {});
     box.addEventListener('click', function () { box.remove(); });
     document.body.appendChild(box);
   }
@@ -168,14 +191,9 @@
         thumb.textContent = '';
         thumb.appendChild(el('img', { src: src, alt: '領収書の画像' }));
         thumb.appendChild(el('span', { text: '押すと拡大' }));
-        thumb.addEventListener('click', function () { zoom(src); });
+        thumb.addEventListener('click', function () { zoom(src, loadImage(w, it, false)); });
       };
-      if (images[k]) put(images[k]);
-      else fetch(API, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain' },
-                        body: JSON.stringify({ fn: 'image', args: { wd: w.workdate, seq: it.seq }, sess: sess }) })
-        .then(function (r) { return r.json(); })
-        .then(function (r) { if (r.ok) { images[k] = 'data:image/jpeg;base64,' + r.r.data; put(images[k]); } else thumb.textContent = '画像なし'; })
-        .catch(function () { thumb.textContent = '画像なし'; });
+      loadImage(w, it, true).then(put, function () { thumb.textContent = '画像なし'; });
     }
     var pct = el('input', { type: 'range', min: '0', max: '100', step: '5' });
     pct.value = a.percent == null ? 100 : a.percent;   // はじめは100％。減らすのは本人
@@ -218,6 +236,24 @@
         el('button', { class: 'soft back', text: '一覧へ', on: { click: function () { list(w); } } }),
         el('button', { text: editing ? '保存する' : '保存して次へ', on: { click: save } })])
     ])]);
+  }
+  // 画像は、裏で取りに行く。同じものは二度取らない。small：一覧用の小さい版（拡大のときは大きい版を取り直す）
+  var imageJobs = {};
+  function loadImage(w, it, small) {
+    var k = w.workdate + '/' + it.seq + (small ? '/s' : '');
+    if (images[k]) return Promise.resolve(images[k]);
+    if (!imageJobs[k]) {
+      imageJobs[k] = fetch(API, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain' },
+                                  body: JSON.stringify({ fn: 'image', args: { wd: w.workdate, seq: it.seq, small: !!small }, sess: sess }) })
+        .then(function (r) { return r.json(); })
+        .then(function (r) { delete imageJobs[k]; if (!r.ok) throw new Error('none'); images[k] = 'data:image/jpeg;base64,' + r.r.data; return images[k]; },
+              function (e) { delete imageJobs[k]; throw e; });
+    }
+    return imageJobs[k];
+  }
+  function warmImages(w) {   // まだ答えていない紙の画像を、1枚ずつ先に取っておく（開いたときに待たせない）
+    var todo = w.items.filter(function (it) { return it.hasImage && !it.answer; }).slice(0, 12), i = 0;
+    (function next() { if (i < todo.length) loadImage(w, todo[i++], true).then(next, next); })();
   }
   // ───── 「ちえに聞く」：LINE を別の画面で開く（このアプリの画面は閉じない）。質問の書き出しを写しておく ─────
   function chieLink(it, m) {
@@ -275,25 +311,33 @@
         { text: '割合設定', on: a && a.percent > 0 && a.percent < 100, click: function () { receipt(w, i); } },
         { text: '100％', on: a && a.percent === 100, click: quick(it, 100) }]);
     }
-    var noBulk = data.noBulk || [];
-    var kinds = [], rest = [];
-    w.items.forEach(function (it) { if (!it.kind || noBulk.indexOf(it.kind) >= 0) rest.push(it); else if (kinds.indexOf(it.kind) < 0) kinds.push(it.kind); });
+    // 第19版：1枚ずつ決めるのが基本。同じ種類が2枚以上あるときだけ、「まとめて決める」を開ける。
+    // 担当者が聞いた質問（asked）は、まとめられない。レシートは、はじめから並べて見せる
+    var noBulk = data.noBulk || [], byKind = {}, kinds = [], rest = [];
+    w.bulkOpen = w.bulkOpen || {};
+    w.items.forEach(function (it) { if (it.kind && noBulk.indexOf(it.kind) < 0 && !it.asked) (byKind[it.kind] = byKind[it.kind] || []).push(it); });
+    w.items.forEach(function (it) {
+      var g = it.kind && byKind[it.kind];
+      if (!g || g.indexOf(it) < 0 || g.length < 2) rest.push(it); else if (kinds.indexOf(it.kind) < 0) kinds.push(it.kind);
+    });
     var blocks = kinds.map(function (kind) {
-      var its = w.items.filter(function (it) { return it.kind === kind; });
+      var its = byKind[kind];
       var done = its.filter(function (it) { return it.answer; }), ps = done.map(function (it) { return it.answer.percent; });
       var same = done.length === its.length && ps.every(function (p) { return p === ps[0]; });
-      var state = same ? ps[0] + '％' : done.length === its.length ? '1枚ずつ' : 'まだ ' + (its.length - done.length) + '枚';
-      var toggle = el('button', { class: 'fold', type: 'button', text: (w.open[kind] ? '▲ とじる' : '▼ レシートを1枚ずつ見る') + '（' + its.length + '枚）',
-        on: { click: function () { w.open[kind] = !w.open[kind]; list(w); } } });
-      return entry('grp' + (done.length === its.length ? '' : ' todo'), kind + '　' + its.length + '枚', state, locked ? [] : [
+      var state = done.length === its.length ? '決まりました' : 'まだ ' + (its.length - done.length) + '枚';
+      var open = !!w.bulkOpen[kind];
+      var toggle = locked ? null : el('button', { class: 'fold', type: 'button', text: open ? '▲ まとめて決めるのを、やめる' : '▼ この' + its.length + '枚を、まとめて決める',
+        on: { click: function () { w.bulkOpen[kind] = !open; list(w); } } });
+      return entry('grp' + (done.length === its.length ? '' : ' todo'), kind + '　' + its.length + '枚', state, locked || !open ? [] : [
         { text: '0％', on: same && ps[0] === 0, click: function () { bulk(kind, 0); } },
         { text: '割合設定', on: same && ps[0] > 0 && ps[0] < 100, click: function () { bulkSet(w, kind, bulk); } },
         { text: '100％', on: same && ps[0] === 100, click: function () { bulk(kind, 100); } }],
-        [toggle].concat(w.open[kind] ? [el('div', { class: 'inner' }, [el('p', { class: 'sub', text: kind + 'のレシート（' + its.length + '枚）' })].concat(its.map(row)))] : []));
+        [toggle, el('div', { class: 'inner' }, its.map(row))]);
     });
+    warmImages(w);
     var skippedN = w.items.filter(function (x) { return x.answer && x.answer.skipped && x.answer.percent > 0; }).length;
     function doSend(confirmed) {
-      settled('保存しています').then(function () { return api('submit', { wd: w.workdate, confirmSkipped: confirmed }, '送信しています'); }).then(function () { home('送信しました。ありがとうございました。'); }).catch(fail(m));
+      sendWith('submit', { wd: w.workdate, confirmSkipped: confirmed }, '送信しています').then(function () { home('送信しました。ありがとうございました。'); }).catch(fail(m));
     }
     var send = el('button', { text: 'この内容で送信する', on: { click: function () { skippedN ? confirmSkipped(w, skippedN, doSend) : doSend(false); } } });
     send.disabled = left > 0;
@@ -301,9 +345,9 @@
       el('h1', { text: '領収書の確認　' + w.items.length + '件' }),
       el('p', { class: 'sub', text: locked ? '送信済みです。直すときは、事務所へご連絡ください。' : 'お答えの期限 ' + day(w.limit) }),
       locked ? null : el('div', { class: 'legend' }, [
-        el('span', { text: '0％：経費にしない' }), el('span', { text: '割合設定：質問に答えて、割合を決める' }), el('span', { text: '100％：全額を経費にする' })]),
-      m].concat(blocks.length ? [el('h2', { class: 'sec', text: '種類ごとにまとめて決める' })] : []).concat(blocks)
-      .concat(rest.length && blocks.length ? [el('h2', { class: 'sec', text: '1枚ずつ決める' })] : []).concat(rest.map(row)).concat(locked ? [] : [send,
+        el('span', { text: '0％：経費にしない' }), el('span', { text: '割合設定：質問に答えて、割合を決める（1枚ずつ）' }), el('span', { text: '100％：全額を経費にする' })]),
+      m].concat(rest.map(row))
+      .concat(blocks.length ? [el('h2', { class: 'sec', text: '同じ種類のレシート' })] : []).concat(blocks).concat(locked ? [] : [send,
       left ? el('p', { class: 'sub', text: 'まだのものが ' + left + '件 あります。全部が決まると、送信できます。' }) : null]).concat([
       el('button', { class: 'soft', text: 'はじめの画面へ', on: { click: function () { home(); } } })]))]);
   }
@@ -456,7 +500,7 @@
   function ratioReview() {
     var m = msgBox(), left = ratio.groups.filter(function (g) { return !ratio.saved[g.name]; }).length;
     function doSend(from) {
-      settled('保存しています').then(function () { return api('ratioSave', { groups: {}, submit: true, from: from }, '送信しています'); }).then(function () { home('送信しました。ありがとうございました。'); }).catch(fail(m));
+      sendWith('ratioSave', { groups: {}, submit: true, from: from }, '送信しています').then(function () { home('送信しました。ありがとうございました。'); }).catch(fail(m));
     }
     var send = el('button', { text: 'この内容で送信する', on: { click: function () { ratio.resend ? askFrom(doSend) : doSend(''); } } });
     var rows = ratio.groups.map(function (def, i) {

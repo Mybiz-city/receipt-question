@@ -29,6 +29,7 @@
       .catch(function () { return { ok: false, err: '通信できませんでした。' }; })
       .then(function (r) {
         busy(false);
+        var ms = document.getElementById('ms'); if (ms && r.ms != null) ms.textContent = 'サーバーの処理 ' + (r.ms / 1000).toFixed(1) + '秒（' + fn + '）';   // 速さの物差し
         if (!r.ok && r.code === 'sess') { sess = ''; login(r.err); throw new Error('sess'); }
         if (!r.ok) throw new Error(r.err);
         return r.r;
