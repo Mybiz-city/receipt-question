@@ -104,7 +104,7 @@
             .concat(w.items.map(function (it) {
               var a = it.answer;
               return el('tr', {}, [el('td', { text: String(it.seq) }), el('td', { text: [it.date, it.payee, it.amount].filter(function (v) { return v !== '' && v != null; }).join(' ') }),
-                el('td', { text: it.question }), el('td', { text: !a ? '（まだ）' : a.percent + '％' }),
+                el('td', { text: it.question }), el('td', { text: !a ? '（まだ）' : a.percent == null ? '（名前のみ）' : a.percent + '％' }),
                 el('td', { text: !a ? '' : a.skipped ? '（お答えなし。100％経費とだけ意思表示）' : [a.what, a.memo].filter(Boolean).join(' ／ ') })]);
             }))), w.submitted ? reopen(w.workdate) : null]));
       });

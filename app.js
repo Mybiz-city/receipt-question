@@ -157,7 +157,7 @@
       document.getElementById('who').textContent = r.name + ' 様';
       var kids = [note ? el('p', { class: bad ? 'warn' : 'done', text: note }) : null];
       var open = r.works.filter(function (w) { return !w.submitted; });
-      if (!open.length && r.ratio.submitted) kids.push(card([el('p', { text: 'いま、お答えいただくものはありません。ありがとうございました。' })]));
+      if (!open.length && (r.corp || r.ratio.submitted)) kids.push(card([el('p', { text: 'いま、お答えいただくものはありません。ありがとうございました。' })]));
       r.works.forEach(function (w) {
         var left = w.items.filter(function (i) { return !i.answer; }).length;
         kids.push(card([
@@ -166,7 +166,7 @@
           el('button', { class: w.submitted ? 'soft' : '', text: w.submitted ? '回答を見る' : left === w.items.length ? '答える' : '続きから答える', on: { click: function () { list(w); } } })
         ]));
       });
-      kids.push(card([
+      if (!r.corp) kids.push(card([   // 第21版：法人には、事業で使う割合を聞かない
         el('h2', { text: r.ratio.year + '年分　事業で使っている割合' }),
         el('p', { class: 'sub', text: r.ratio.submitted ? '送信済みです（' + day(r.ratio.submitted) + '）。' : '家賃や電気代などのうち、事業で使っている割合をおたずねします。年に1回です。' }),
         r.ratio.submitted
@@ -221,6 +221,7 @@
       };
       loadImage(w, it, true).then(put, function () { thumb.textContent = '画像なし'; });
     }
+    if (w.corp) return receiptCorp(w, i, thumb);   // 第21版：法人は、相手の名前と目的だけを書く
     var pct = el('input', { type: 'range', min: '0', max: '100', step: '5' });
     pct.value = a.percent == null ? 100 : a.percent;   // はじめは100％。減らすのは本人
     var pctText = el('b', { class: 'pct', text: pctLabel(pct.value) });
@@ -257,6 +258,33 @@
       el('label', {}, [document.createTextNode('事業で使った割合　'), pctText]), pct,
       el('div', { class: 'scale' }, [el('span', { text: '0％' }), el('span', { text: '50％' }), el('span', { text: '100％' })]),
       el('label', { text: '上の質問へのお答え' }), kind, memo,
+      chieLink(it, m),
+      el('div', { class: 'row' }, [
+        el('button', { class: 'soft back', text: '一覧へ', on: { click: function () { list(w); } } }),
+        el('button', { text: editing ? '保存する' : '保存して次へ', on: { click: save } })])
+    ])]);
+  }
+  function receiptCorp(w, i, thumb) {
+    var it = w.items[i], a = it.answer || {}, m = msgBox(), editing = !!it.answer;
+    var memo = el('input', { type: 'text', maxlength: '300', placeholder: '例：〇〇商事 山田様　新商品の打合せ' });
+    memo.value = (a.memo || '').replace(/^'/, '');
+    function save() {
+      m.hidden = true;
+      if (!memo.value.trim()) { m.textContent = 'お相手のお名前を書いてください。'; m.hidden = false; return; }
+      var mine = { what: '', percent: null, memo: memo.value };
+      it.answer = mine;
+      later('answer', { wd: w.workdate, seq: it.seq, memo: mine.memo }, function (r) { if (it.answer === mine) it.answer = r.answer; });
+      var next = w.items.findIndex(function (x, j) { return j > i && !x.answer; });
+      editing || next < 0 ? list(w) : receipt(w, next);
+    }
+    show([card([
+      el('p', { class: 'step', text: (i + 1) + ' / ' + w.items.length + ' 件目　お答えの期限 ' + day(w.limit) }),
+      el('div', { class: 'top' }, [thumb, el('div', {}, [
+        el('p', { class: 'sub', text: [day(it.date), it.payee, yen(it.amount)].filter(Boolean).join('　') }),
+        el('p', { class: 'q', text: it.question })])]),
+      m,
+      el('label', { text: 'お相手のお名前（会社名）と、目的' }), memo,
+      el('p', { class: 'small', text: '税務調査のときに、支出の内容を説明するための記録です。' }),
       chieLink(it, m),
       el('div', { class: 'row' }, [
         el('button', { class: 'soft back', text: '一覧へ', on: { click: function () { list(w); } } }),
@@ -332,6 +360,8 @@
       var a = it.answer, i = w.items.indexOf(it);
       // 日付・取引先・金額は、1行ずつ出す（1行に詰めると、長い店名で切れて読めない）
       var title = [(i + 1) + '．' + (day(it.date) || '日付なし'), it.payee || '（取引先は読めていません）', yen(it.amount)].filter(Boolean);
+      if (w.corp) return entry('rc' + (a ? '' : ' todo'), title, a ? '記入済み' : 'まだ', locked ? [] : [
+        { text: a ? 'お名前を直す' : 'お相手の名前を書く', on: !!a, click: function () { receipt(w, i); } }]);
       return entry('rc' + (a ? '' : ' todo'), title, a ? a.percent + '％' : 'まだ', locked ? [] : [
         { text: '0％', on: a && a.percent === 0, click: quick(it, 0) },
         { text: '割合設定', on: a && a.percent > 0 && a.percent < 100, click: function () { receipt(w, i); } },
@@ -341,7 +371,7 @@
     // 担当者が聞いた質問（asked）は、まとめられない。レシートは、はじめから並べて見せる
     var noBulk = data.noBulk || [], byKind = {}, kinds = [], rest = [];
     w.bulkOpen = w.bulkOpen || {};
-    w.items.forEach(function (it) { if (it.kind && noBulk.indexOf(it.kind) < 0 && !it.asked) (byKind[it.kind] = byKind[it.kind] || []).push(it); });
+    w.items.forEach(function (it) { if (!w.corp && it.kind && noBulk.indexOf(it.kind) < 0 && !it.asked) (byKind[it.kind] = byKind[it.kind] || []).push(it); });
     w.items.forEach(function (it) {
       var g = it.kind && byKind[it.kind];
       if (!g || g.indexOf(it) < 0 || g.length < 2) rest.push(it); else if (kinds.indexOf(it.kind) < 0) kinds.push(it.kind);
@@ -370,7 +400,7 @@
     show([card([
       el('h1', { text: '領収書の確認　' + w.items.length + '件' }),
       el('p', { class: 'sub', text: locked ? '送信済みです。直すときは、事務所へご連絡ください。' : 'お答えの期限 ' + day(w.limit) }),
-      locked ? null : el('div', { class: 'legend' }, [
+      locked ? null : w.corp ? el('p', { class: 'sub', text: '飲食と贈り物について、お相手のお名前（会社名）と目的を書いてください。' }) : el('div', { class: 'legend' }, [
         el('span', { text: '0％：経費にしない' }), el('span', { text: '割合設定：質問に答えて、割合を決める（1枚ずつ）' }), el('span', { text: '100％：全額を経費にする' })]),
       m].concat(rest.map(row))
       .concat(blocks.length ? [el('h2', { class: 'sec', text: '同じ種類のレシート' })] : []).concat(blocks).concat(locked ? [] : [send,
