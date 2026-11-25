@@ -48,7 +48,12 @@
       } } })])]);
   }
 
-  function list(note, url, quick) {   // quick：控えからすぐ出す（押したあとの動きは、いつも読み直す）
+  function copy(text, btn, label) {   // 押したら、その場でコピーする。できたら、ボタンの字で知らせる
+    var ok = function () { btn.textContent = 'コピーしました'; setTimeout(function () { btn.textContent = label; }, 2000); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, function () { btn.textContent = 'コピーできません。文を選んでコピーしてください'; });
+    else { try { document.execCommand('copy'); ok(); } catch (e) { btn.textContent = 'コピーできません'; } }
+  }
+  function list(note, url, quick, message) {   // quick：控えからすぐ出す（押したあとの動きは、いつも読み直す）
     ((quick && lastList) ? Promise.resolve(lastList) : api('oClients').then(function (r) { lastList = r; return r; })).then(function (r) {
       var code6 = el('input', { type: 'text', inputmode: 'numeric', maxlength: '10', autocomplete: 'off', placeholder: 'いまの6桁' });
       var m = el('p', { class: note && note.bad ? 'warn' : 'done', text: note ? note.text : '', hidden: note ? null : '' });
@@ -65,17 +70,26 @@
           el('td', { text: c.name }), el('td', { text: state }), el('td', { text: c.expires }),
           el('td', {}, [
             el('button', { class: 'small', text: c.issued ? 'URLを作り直す' : 'URLを作る', on: { click: act('oIssue', { code: c.code }, function (x) {
-              list({ text: c.name + ' のURLを作りました（期限 ' + x.expires + '）。古いURLは使えなくなりました。' }, x.url); }) } }),
+              list({ text: c.name + ' のURLを作りました（期限 ' + x.expires + '）。古いURLは使えなくなりました。' }, x.url, false, x.message); }) } }),
             c.issued ? el('button', { class: 'small soft', text: c.forgot ? '番号を消す（依頼に応える）' : '番号を消す', on: { click: act('oReset', { code: c.code }, function () {
               list({ text: c.name + ' の番号を消しました。次に開いたとき、ご本人が決め直します。' }); }) } }) : null,
-            el('button', { class: 'small soft', text: '回答を見る', on: { click: function () { status(c.code); } } })])]);
+            el('button', { class: 'small soft', text: '回答を見る', on: { click: function () { status(c.code); } } }),
+            c.doneText ? el('button', { class: 'small soft', text: '完了の知らせをコピー', on: { click: function (ev) {   // 第24版：質問が無い月に、LINE などへ貼る文
+              copy(c.doneText, ev.currentTarget, '完了の知らせをコピー');
+              api('oCopied', { code: c.code }).catch(function () {}); } } }) : null])]);
       });
       var urlBox = null;
       if (url) {
         var u = el('input', { type: 'text', readonly: '' }); u.value = url;
         urlBox = el('div', { class: 'card' }, [el('h2', { text: '顧問先へ送るURL' }),
           el('p', { class: 'sub', text: 'このURLは、その顧問先のご本人にだけ送ってください。この画面を閉じると、もう表示できません（作り直しはできます）。' }), u,
-          el('button', { class: 'small', text: 'コピー', on: { click: function () { u.select(); navigator.clipboard && navigator.clipboard.writeText(url); } } })]);
+          el('button', { class: 'small soft', text: 'URLだけコピー', on: { click: function (ev) { u.select(); copy(url, ev.currentTarget, 'URLだけコピー'); } } })]);
+        if (message) {   // 第24版：そのまま貼って送れる文（文はサーバーから届く）
+          var ta = el('textarea', { readonly: '', rows: '9' }); ta.value = message;
+          urlBox.appendChild(el('h2', { text: 'メッセージ付きで送る' }));
+          urlBox.appendChild(ta);
+          urlBox.appendChild(el('button', { class: 'small', text: 'メッセージごとコピー', on: { click: function (ev) { ta.select(); copy(message, ev.currentTarget, 'メッセージごとコピー'); } } }));
+        }
       }
       show([m, urlBox, el('div', { class: 'card' }, [el('h1', { text: '顧問先の一覧' }),
         r.needTotp ? el('label', { text: '前に6桁を入れてから60分たちました。URLを作る・番号を消すときは、認証アプリのいまの6桁を入れてから押します' }) : el('p', { class: 'sub', text: '6桁は、ログインから60分は入れなくて大丈夫です。' }),
