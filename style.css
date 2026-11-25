@@ -141,3 +141,8 @@ a.chie{display:block;margin:10px 0 2px;padding:10px 12px;border:1px solid #00A88
 /* 第20版 */
 label.check{display:flex;align-items:flex-start;gap:8px;font-size:14px;margin:12px 0}
 label.check input{width:22px;height:22px;flex:none;margin:0}
+
+/* 第23版：原本を捨てないための案内 */
+.keep{margin:14px 0 0;padding:12px 14px;border:1px solid #E6C56B;background:#FFF8E1;border-radius:12px;font-size:15px;line-height:1.7}
+.keep p{margin:0}
+.keep .keeph{font-weight:700;margin-bottom:2px}

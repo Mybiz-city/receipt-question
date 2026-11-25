@@ -173,9 +173,14 @@
           ? el('button', { class: 'link', text: '使い方が変わったので、送り直す', on: { click: function () { api('ratioReopen').then(ratioStart).catch(function () {}); } } })
           : el('button', { class: 'soft', text: '割合を決める', on: { click: function () { ratioStart(); } } })
       ]));
+      if (r.notice && r.notice.text) {   // 第23版：原本を捨てないための案内。文はサーバーから届く。出したことを、裏で記録する
+        kids.push(el('div', { class: 'keep' }, [el('p', { class: 'keeph', text: 'レシートの原本について' }), el('p', { text: r.notice.text })]));
+        if (seenNotice !== r.notice.month + r.notice.kind) { seenNotice = r.notice.month + r.notice.kind; api('noticeSeen', {}).catch(function () { seenNotice = ''; }); }
+      }
       show(kids);
     }).catch(function (e) { if (e.message !== 'sess') show([card([el('p', { class: 'warn', text: e.shown || '読み込めませんでした。' })])]); });
   }
+  var seenNotice = '';
 
   // ───── 選ぶボタン（どれか1つ） ─────
   function picker(options, current, onPick) {
